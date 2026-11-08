@@ -1,0 +1,7 @@
+# output/
+# Os ficheiros gerados pelo workflow são publicados como artefactos do GitHub Actions.
+# Não são commitados para o repositório.
+terrain/
+export/
+*.json
+!.gitkeep
