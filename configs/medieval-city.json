@@ -1,0 +1,31 @@
+{
+  "world_name": "AXEV Medieval Kingdom",
+  "prompt": "fortified medieval city in a mountain valley with castle, walls, watchtowers, market square, river, dense forest, and surrounding mountains",
+  "seed": 1337,
+  "size_hectares": 400,
+  "resolution": 1024,
+  "meters_per_pixel": 2.0,
+  "terrain_ops": [
+    {"op": "voronoi", "n": 6, "key": "region"},
+    {"op": "radial_mask", "key": "valley_floor", "cx": 512, "cy": 512, "radius": 300, "falloff": 1.5},
+    {"op": "fbm", "octaves": 7, "base_freq": 4, "persistence": 0.55},
+    {"op": "mountains", "mask": "region0", "height_m": 280.0, "octaves": 6},
+    {"op": "mountains", "mask": "region1", "height_m": 220.0, "octaves": 5},
+    {"op": "mountains", "mask": "region2", "height_m": 190.0, "octaves": 5},
+    {"op": "raise", "mask": "valley_floor", "height_m": 20.0},
+    {"op": "depress", "mask": "valley_floor", "depth_m": 40.0},
+    {"op": "river", "start": [80, 150], "end": [920, 870], "width": 14},
+    {"op": "coast", "sea_level_m": 5.0},
+    {"op": "terraces", "mask": "region0", "step": 18},
+    {"op": "normalize", "min_m": 0.0, "max_m": 320.0}
+  ],
+  "regions": ["highland_north", "highland_south", "highland_east", "valley_east", "forest_west", "lowland_river"],
+  "structures": [
+    "castle", "walls", "watchtowers", "houses", "market", "bridges"
+  ],
+  "natural_features": [
+    "river", "mountains", "forest", "vegetation"
+  ],
+  "export_formats": ["gltf_manifest", "godot_tscn", "unreal_script"],
+  "_note": "GLB individual assets exigem GPU (TRELLIS.2). Terrain + manifests sao CPU-only."
+}
