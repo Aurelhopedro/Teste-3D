@@ -1,0 +1,351 @@
+name: AXEV World Generator
+
+on:
+  workflow_dispatch:
+    inputs:
+      world_name:
+        description: 'Nome do mundo'
+        required: false
+        default: 'AXEV Medieval Kingdom'
+      seed:
+        description: 'Seed (numero inteiro para reproducibilidade)'
+        required: false
+        default: '1337'
+      resolution:
+        description: 'Resolucao do heightmap (512, 1024, 2048)'
+        required: false
+        default: '1024'
+        type: choice
+        options:
+          - '512'
+          - '1024'
+          - '2048'
+      size_hectares:
+        description: 'Dimensao do mundo em hectares'
+        required: false
+        default: '400'
+      terrain_style:
+        description: 'Estilo de terreno'
+        required: false
+        default: 'mountain_valley'
+        type: choice
+        options:
+          - 'mountain_valley'
+          - 'coastal_plains'
+          - 'highland_plateau'
+          - 'island'
+
+jobs:
+  generate-world:
+    name: "Gerar Mundo 3D — ${{ github.event.inputs.world_name }}"
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      # -----------------------------------------------------------------
+      # 1. Checkout deste repositorio
+      # -----------------------------------------------------------------
+      - name: Checkout Teste-3D
+        uses: actions/checkout@v4
+
+      # -----------------------------------------------------------------
+      # 2. Python setup
+      # -----------------------------------------------------------------
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # -----------------------------------------------------------------
+      # 3. Obter o motor Terminalia (worldgen-forge)
+      # -----------------------------------------------------------------
+      - name: Clonar motor Terminalia/WorldGen Forge
+        run: |
+          git clone --depth 1 https://github.com/Ardynai/worldgen-forge.git worldgen-forge
+          echo "Motor clonado. Commit:"
+          git -C worldgen-forge log -1 --format="%H %s %ai"
+
+      # -----------------------------------------------------------------
+      # 4. Instalar dependencias do motor
+      # -----------------------------------------------------------------
+      - name: Instalar dependencias do motor
+        run: |
+          pip install --upgrade pip
+          pip install -e ./worldgen-forge
+          echo "Dependencias instaladas:"
+          pip show terminalia numpy pillow pydantic | grep -E "^(Name|Version):"
+
+      # -----------------------------------------------------------------
+      # 5. Validar parametros e mostrar configuracao
+      # -----------------------------------------------------------------
+      - name: Validar parametros e mostrar configuracao
+        run: |
+          echo "====================================="
+          echo "CONFIGURACAO DA GERACAO"
+          echo "====================================="
+          echo "World Name  : ${{ github.event.inputs.world_name }}"
+          echo "Seed        : ${{ github.event.inputs.seed }}"
+          echo "Resolution  : ${{ github.event.inputs.resolution }}px"
+          echo "Size        : ${{ github.event.inputs.size_hectares }} hectares"
+          echo "Style       : ${{ github.event.inputs.terrain_style }}"
+          echo "Runner      : ubuntu-latest (CPU-only, sem GPU)"
+          echo "GPU         : NAO (terrain + exports sao CPU-only)"
+          echo "Paid APIs   : NAO"
+          echo "====================================="
+
+          # Validar seed
+          SEED="${{ github.event.inputs.seed }}"
+          if ! [[ "$SEED" =~ ^[0-9]+$ ]]; then
+            echo "ERRO: seed deve ser um numero inteiro. Recebido: $SEED"
+            exit 1
+          fi
+          echo "Parametros validados com sucesso."
+
+      # -----------------------------------------------------------------
+      # 6. Preparar configuracao dinamica
+      # -----------------------------------------------------------------
+      - name: Preparar configuracao do mundo
+        run: |
+          python3 - <<'PYEOF'
+          import json, os
+
+          # Ler config base
+          with open("configs/medieval-city.json") as f:
+              cfg = json.load(f)
+
+          # Aplicar parametros do workflow
+          cfg["world_name"] = "${{ github.event.inputs.world_name }}"
+          cfg["seed"] = int("${{ github.event.inputs.seed }}")
+          cfg["resolution"] = int("${{ github.event.inputs.resolution }}")
+          cfg["size_hectares"] = float("${{ github.event.inputs.size_hectares }}")
+
+          # Ajustar style de terreno
+          style = "${{ github.event.inputs.terrain_style }}"
+          if style == "coastal_plains":
+              # Terreno mais plano, mais agua
+              for op in cfg["terrain_ops"]:
+                  if op["op"] == "mountains":
+                      op["height_m"] = op["height_m"] * 0.4
+                  if op["op"] == "normalize":
+                      op["max_m"] = 120.0
+          elif style == "highland_plateau":
+              # Planalto elevado
+              for op in cfg["terrain_ops"]:
+                  if op["op"] == "raise":
+                      op["height_m"] = 80.0
+          elif style == "island":
+              # Ilha: terreno mais concentrado
+              for op in cfg["terrain_ops"]:
+                  if op["op"] == "radial_mask":
+                      op["radius"] = 220
+                      op["falloff"] = 3.0
+
+          # Guardar config final
+          os.makedirs("output", exist_ok=True)
+          with open("output/runtime-config.json", "w") as f:
+              json.dump(cfg, f, indent=2)
+
+          with open("configs/medieval-city.json", "w") as f:
+              json.dump(cfg, f, indent=2)
+
+          print(f"Config guardada: world={cfg['world_name']}, seed={cfg['seed']}, res={cfg['resolution']}")
+          PYEOF
+
+      # -----------------------------------------------------------------
+      # 7. GERAR O MUNDO (etapa principal)
+      # -----------------------------------------------------------------
+      - name: Gerar mundo AXEV Medieval Kingdom
+        run: |
+          echo "A iniciar geracao do mundo..."
+          python scripts/generate-world.py
+
+      # -----------------------------------------------------------------
+      # 8. Validar ficheiros gerados
+      # -----------------------------------------------------------------
+      - name: Validar ficheiros gerados
+        run: |
+          echo "====================================="
+          echo "VALIDACAO DOS FICHEIROS"
+          echo "====================================="
+
+          ERRORS=0
+
+          # Heightmap
+          if [ -f "output/terrain/hm.png" ]; then
+            SIZE=$(du -sh output/terrain/hm.png | cut -f1)
+            echo "✅ heightmap: output/terrain/hm.png ($SIZE)"
+            # Verificar que nao esta vazio
+            BYTES=$(stat -c%s output/terrain/hm.png)
+            if [ "$BYTES" -lt 10000 ]; then
+              echo "❌ ERRO: heightmap parece vazio ou corrompido ($BYTES bytes)"
+              ERRORS=$((ERRORS + 1))
+            fi
+          else
+            echo "❌ ERRO: output/terrain/hm.png nao encontrado"
+            ERRORS=$((ERRORS + 1))
+          fi
+
+          # world.json
+          if [ -f "output/world.json" ]; then
+            SIZE=$(du -sh output/world.json | cut -f1)
+            echo "✅ world.json: output/world.json ($SIZE)"
+            # Validar JSON
+            python3 -c "import json; json.load(open('output/world.json')); print('   JSON valido')"
+          else
+            echo "❌ ERRO: output/world.json nao encontrado"
+            ERRORS=$((ERRORS + 1))
+          fi
+
+          # Manifest glTF
+          if [ -f "output/export/gltf/manifest.json" ]; then
+            echo "✅ glTF manifest: output/export/gltf/manifest.json"
+          else
+            echo "❌ ERRO: glTF manifest nao encontrado"
+            ERRORS=$((ERRORS + 1))
+          fi
+
+          # Godot scene
+          if [ -f "output/export/godot/world.tscn" ]; then
+            echo "✅ Godot scene: output/export/godot/world.tscn"
+          else
+            echo "❌ ERRO: Godot scene nao encontrado"
+            ERRORS=$((ERRORS + 1))
+          fi
+
+          # Metricas
+          if [ -f "output/metrics.json" ]; then
+            echo "✅ metricas: output/metrics.json"
+            echo ""
+            echo "METRICAS:"
+            python3 -c "
+          import json
+          m = json.load(open('output/metrics.json'))
+          print(f'  Tempo total: {m.get(\"total_time_s\",\"?\")}s')
+          print(f'  Resolucao:   {m.get(\"resolution_px\",\"?\")}px')
+          print(f'  Tamanho:     {m.get(\"size_meters\",\"?\")}m x {m.get(\"size_meters\",\"?\")}m')
+          print(f'  Regioes:     {m.get(\"n_regions\",\"?\")}')
+          print(f'  Operadores:  {m.get(\"n_operators\",\"?\")}')
+          "
+          else
+            echo "⚠️  AVISO: metrics.json nao encontrado"
+          fi
+
+          echo ""
+          echo "Mascaras de regiao:"
+          ls -la output/terrain/mask_*.png 2>/dev/null || echo "  Nenhuma mascara encontrada"
+
+          if [ "$ERRORS" -gt 0 ]; then
+            echo ""
+            echo "❌ FALHOU: $ERRORS erro(s) encontrado(s)"
+            exit 1
+          fi
+
+          echo ""
+          echo "✅ TODOS OS FICHEIROS VALIDADOS COM SUCESSO"
+
+      # -----------------------------------------------------------------
+      # 9. Gerar relatorio tecnico
+      # -----------------------------------------------------------------
+      - name: Gerar relatorio tecnico
+        run: |
+          python scripts/generate-report.py
+          echo ""
+          echo "Preview do relatorio:"
+          head -50 docs/WORLD_GENERATION_REPORT.md
+
+      # -----------------------------------------------------------------
+      # 10. Registar commit do motor
+      # -----------------------------------------------------------------
+      - name: Registar versao do motor
+        run: |
+          MOTOR_COMMIT=$(git -C worldgen-forge log -1 --format="%H")
+          MOTOR_DATE=$(git -C worldgen-forge log -1 --format="%ai")
+          echo "Motor commit: $MOTOR_COMMIT"
+          echo "Motor date:   $MOTOR_DATE"
+          echo "MOTOR_COMMIT=$MOTOR_COMMIT" >> "$GITHUB_ENV"
+
+          # Adicionar ao metrics.json
+          python3 - <<'PYEOF'
+          import json, os
+          path = "output/metrics.json"
+          if os.path.exists(path):
+              m = json.load(open(path))
+              m["engine_commit"] = os.environ.get("MOTOR_COMMIT", "unknown")
+              m["engine_date"] = "$MOTOR_DATE"
+              with open(path, "w") as f:
+                  json.dump(m, f, indent=2)
+              print("metrics.json actualizado com commit do motor")
+          PYEOF
+
+      # -----------------------------------------------------------------
+      # 11. Publicar artefacto descarregavel
+      # -----------------------------------------------------------------
+      - name: Publicar artefacto AXEV-MEDIEVAL-WORLD-TEST-001
+        uses: actions/upload-artifact@v4
+        with:
+          name: AXEV-MEDIEVAL-WORLD-TEST-001
+          path: |
+            output/terrain/hm.png
+            output/terrain/mask_*.png
+            output/world.json
+            output/metrics.json
+            output/runtime-config.json
+            output/export/gltf/manifest.json
+            output/export/godot/world.tscn
+            docs/WORLD_GENERATION_REPORT.md
+          retention-days: 30
+          if-no-files-found: error
+
+      # -----------------------------------------------------------------
+      # 12. Sumario final no GitHub Actions
+      # -----------------------------------------------------------------
+      - name: Sumario final
+        if: always()
+        run: |
+          python3 - <<'PYEOF'
+          import json, os
+
+          metrics_path = "output/metrics.json"
+          if not os.path.exists(metrics_path):
+              print("metrics.json nao encontrado — geracao pode ter falhado")
+              exit(0)
+
+          m = json.load(open(metrics_path))
+
+          summary = f"""
+          ## AXEV World Generator — Resultado
+
+          | Campo | Valor |
+          |---|---|
+          | Mundo | {m.get('world_name', 'N/A')} |
+          | Motor | {m.get('engine', 'N/A')} |
+          | Commit | {m.get('engine_commit', 'N/A')[:12]} |
+          | Tempo total | {m.get('total_time_s', 'N/A')}s |
+          | Resolucao | {m.get('resolution_px', 'N/A')}px |
+          | Dimensao | {m.get('size_meters', 'N/A')}m x {m.get('size_meters', 'N/A')}m |
+          | Regioes | {m.get('n_regions', 'N/A')} |
+          | Ficheiros | {len(m.get('files_generated', []))} |
+          | GPU usada | Nao |
+          | APIs pagas | Nao |
+
+          ### Ficheiros gerados
+          """
+
+          for f in m.get("files_generated", []):
+              summary += f"\n          - `{f}`"
+
+          summary += """
+
+          ### Limitacoes
+          """
+          for lim in m.get("limitations", []):
+              summary += f"\n          - ⚠️ {lim}"
+
+          print(summary)
+
+          # Escrever no GITHUB_STEP_SUMMARY
+          summary_path = os.environ.get("GITHUB_STEP_SUMMARY", "")
+          if summary_path:
+              with open(summary_path, "w") as f:
+                  f.write(summary)
+          PYEOF
