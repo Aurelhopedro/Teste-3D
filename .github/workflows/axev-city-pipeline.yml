@@ -1,0 +1,213 @@
+name: AXEV City Generator — Pipeline Completa
+
+on:
+  workflow_dispatch:
+
+jobs:
+
+  # ══════════════════════════════════════════════════════════════
+  # STAGE 1 — ARCHITECT
+  # Gera planta.json + planta.svg
+  # ══════════════════════════════════════════════════════════════
+  architect:
+    name: "Stage 1 — Architect"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Instalar dependencias
+        run: pip install shapely numpy
+
+      - name: Executar Architect
+        run: python scripts/stage1_architect.py
+
+      - name: Upload artefacto
+        uses: actions/upload-artifact@v4
+        with:
+          name: stage1-planta
+          path: output/
+          retention-days: 1
+
+      - name: Sumario
+        run: |
+          echo "## Stage 1 — Architect" >> $GITHUB_STEP_SUMMARY
+          echo "- planta.json gerada" >> $GITHUB_STEP_SUMMARY
+          echo "- planta.svg gerada" >> $GITHUB_STEP_SUMMARY
+
+  # ══════════════════════════════════════════════════════════════
+  # STAGE 2 — EXTERIOR BUILDER
+  # Constroi exterior em Blender headless → exterior.glb
+  # ══════════════════════════════════════════════════════════════
+  exterior:
+    name: "Stage 2 — Exterior Builder"
+    runs-on: ubuntu-latest
+    needs: architect
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Stage 1
+        uses: actions/download-artifact@v4
+        with:
+          name: stage1-planta
+          path: output/
+
+      - name: Instalar Blender
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y blender
+          blender --version
+
+      - name: Executar Exterior Builder
+        run: blender --background --python scripts/stage2_exterior.py
+
+      - name: Upload artefacto
+        uses: actions/upload-artifact@v4
+        with:
+          name: stage2-exterior
+          path: output/
+          retention-days: 1
+
+      - name: Sumario
+        run: |
+          echo "## Stage 2 — Exterior Builder" >> $GITHUB_STEP_SUMMARY
+          echo "- exterior.glb gerado" >> $GITHUB_STEP_SUMMARY
+          ls -lh output/*.glb >> $GITHUB_STEP_SUMMARY || true
+
+  # ══════════════════════════════════════════════════════════════
+  # STAGE 3 — INTERIOR BUILDER
+  # Importa exterior.glb, constroi interiores → interior.glb
+  # ══════════════════════════════════════════════════════════════
+  interior:
+    name: "Stage 3 — Interior Builder"
+    runs-on: ubuntu-latest
+    needs: exterior
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Stage 2
+        uses: actions/download-artifact@v4
+        with:
+          name: stage2-exterior
+          path: output/
+
+      - name: Instalar Blender
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y blender
+
+      - name: Executar Interior Builder
+        run: blender --background --python scripts/stage3_interior.py
+
+      - name: Upload artefacto
+        uses: actions/upload-artifact@v4
+        with:
+          name: stage3-interior
+          path: output/
+          retention-days: 1
+
+      - name: Sumario
+        run: |
+          echo "## Stage 3 — Interior Builder" >> $GITHUB_STEP_SUMMARY
+          echo "- interior.glb gerado (5 quartos + paredes internas + portas)" >> $GITHUB_STEP_SUMMARY
+          ls -lh output/*.glb >> $GITHUB_STEP_SUMMARY || true
+
+  # ══════════════════════════════════════════════════════════════
+  # STAGE 4 — FURNISHER
+  # Importa interior.glb, adiciona mobilia + arvores → furnished.glb
+  # ══════════════════════════════════════════════════════════════
+  furnisher:
+    name: "Stage 4 — Furnisher"
+    runs-on: ubuntu-latest
+    needs: interior
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Stage 3
+        uses: actions/download-artifact@v4
+        with:
+          name: stage3-interior
+          path: output/
+
+      - name: Instalar Blender
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y blender
+
+      - name: Executar Furnisher
+        run: blender --background --python scripts/stage4_furnisher.py
+
+      - name: Upload artefacto
+        uses: actions/upload-artifact@v4
+        with:
+          name: stage4-furnished
+          path: output/
+          retention-days: 1
+
+      - name: Sumario
+        run: |
+          echo "## Stage 4 — Furnisher" >> $GITHUB_STEP_SUMMARY
+          echo "- Mobilia: sala, cozinha, quarto, WC" >> $GITHUB_STEP_SUMMARY
+          echo "- Jardim: relva + caminho + 2 arvores (carvalho + pinheiro)" >> $GITHUB_STEP_SUMMARY
+          ls -lh output/*.glb >> $GITHUB_STEP_SUMMARY || true
+
+  # ══════════════════════════════════════════════════════════════
+  # STAGE 5 — ASSEMBLER
+  # Junta tudo, optimiza e exporta GLB + OBJ finais
+  # ══════════════════════════════════════════════════════════════
+  assembler:
+    name: "Stage 5 — Assembler (Final)"
+    runs-on: ubuntu-latest
+    needs: furnisher
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Stage 4
+        uses: actions/download-artifact@v4
+        with:
+          name: stage4-furnished
+          path: output/
+
+      - name: Instalar Blender
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y blender
+
+      - name: Executar Assembler
+        run: blender --background --python scripts/stage5_assembler.py
+
+      - name: Publicar artefacto final
+        uses: actions/upload-artifact@v4
+        with:
+          name: AXEV-CASA-FINAL
+          path: |
+            output/casa_final.glb
+            output/casa_final.obj
+            output/planta.json
+            output/planta.svg
+            output/pipeline_report.json
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Sumario final
+        run: |
+          echo "## Pipeline AXEV City Generator — COMPLETA" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Stage | Resultado |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|" >> $GITHUB_STEP_SUMMARY
+          echo "| 1 Architect | planta.json + planta.svg |" >> $GITHUB_STEP_SUMMARY
+          echo "| 2 Exterior  | paredes + telhado + janelas |" >> $GITHUB_STEP_SUMMARY
+          echo "| 3 Interior  | quartos + tecto + paredes internas |" >> $GITHUB_STEP_SUMMARY
+          echo "| 4 Furnisher | mobilia + 2 arvores + jardim |" >> $GITHUB_STEP_SUMMARY
+          echo "| 5 Assembler | casa_final.glb + casa_final.obj |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ -f output/pipeline_report.json ]; then
+            echo "### Relatorio" >> $GITHUB_STEP_SUMMARY
+            cat output/pipeline_report.json >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Ficheiros" >> $GITHUB_STEP_SUMMARY
+          ls -lh output/ >> $GITHUB_STEP_SUMMARY
