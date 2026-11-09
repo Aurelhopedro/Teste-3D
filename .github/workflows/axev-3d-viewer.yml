@@ -1,0 +1,152 @@
+name: AXEV 3D Terrain Viewer
+
+on:
+  workflow_dispatch:
+    inputs:
+      world_name:
+        description: 'Nome do mundo'
+        required: false
+        default: 'AXEV Medieval Kingdom'
+      seed:
+        description: 'Seed'
+        required: false
+        default: '1337'
+      resolution:
+        description: 'Resolucao do heightmap'
+        required: false
+        default: '512'
+        type: choice
+        options:
+          - '256'
+          - '512'
+          - '1024'
+      terrain_style:
+        description: 'Estilo de terreno'
+        required: false
+        default: 'mountain_valley'
+        type: choice
+        options:
+          - 'mountain_valley'
+          - 'island'
+          - 'highland_plateau'
+
+jobs:
+  generate-and-view:
+    name: "Gerar + Visualizar 3D"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Clonar motor Terminalia
+        run: git clone --depth 1 https://github.com/Ardynai/worldgen-forge.git worldgen-forge
+
+      - name: Instalar dependencias
+        run: |
+          pip install --upgrade pip
+          pip install -e ./worldgen-forge
+          pip install numpy pillow
+
+      - name: Preparar config dinamica
+        run: |
+          python3 - <<'PYEOF'
+          import json, os
+          with open("configs/medieval-city.json") as f:
+              cfg = json.load(f)
+          cfg["world_name"] = "${{ github.event.inputs.world_name }}"
+          cfg["seed"] = int("${{ github.event.inputs.seed }}")
+          cfg["resolution"] = int("${{ github.event.inputs.resolution }}")
+          style = "${{ github.event.inputs.terrain_style }}"
+          if style == "island":
+              for op in cfg["terrain_ops"]:
+                  if op["op"] == "radial_mask":
+                      op["radius"] = 220
+                      op["falloff"] = 3.0
+          elif style == "highland_plateau":
+              for op in cfg["terrain_ops"]:
+                  if op["op"] == "raise":
+                      op["height_m"] = 80.0
+          with open("configs/medieval-city.json", "w") as f:
+              json.dump(cfg, f, indent=2)
+          os.makedirs("output/terrain", exist_ok=True)
+          os.makedirs("output/viewer", exist_ok=True)
+          print(f"Config pronta: {cfg['world_name']}, seed={cfg['seed']}, res={cfg['resolution']}")
+          PYEOF
+
+      - name: Gerar terreno
+        run: python scripts/generate-world.py
+
+      - name: Converter heightmap para terrain_data.json
+        run: |
+          python3 - <<'PYEOF'
+          import json, os
+          from PIL import Image
+          import numpy as np
+
+          hm = Image.open("output/terrain/hm.png")
+          arr = np.array(hm, dtype=np.float32)
+          arr = (arr - arr.min()) / (arr.max() - arr.min() + 1e-8)
+
+          target = 128
+          step = max(1, arr.shape[0] // target)
+          small = arr[::step, ::step][:target, :target]
+          h, w = small.shape
+          heights = [round(float(v), 4) for v in small.flatten()]
+
+          cfg = json.load(open("configs/medieval-city.json"))
+          data = {
+              "world_name": cfg["world_name"],
+              "seed": cfg["seed"],
+              "width": w,
+              "height": h,
+              "heights": heights,
+              "max_height_m": 320.0,
+              "size_m": cfg["resolution"] * cfg["meters_per_pixel"],
+              "regions": cfg["regions"]
+          }
+          out = "output/viewer/terrain_data.json"
+          with open(out, "w") as f:
+              json.dump(data, f)
+          print(f"terrain_data.json: {w}x{h} pts, {os.path.getsize(out)/1024:.1f} KB")
+          PYEOF
+
+      - name: Criar visualizador HTML 3D
+        run: python scripts/generate-viewer.py
+
+      - name: Publicar artefacto AXEV-3D-VIEWER
+        uses: actions/upload-artifact@v4
+        with:
+          name: AXEV-3D-VIEWER
+          path: |
+            output/viewer/index.html
+            output/viewer/terrain_data.json
+            output/terrain/hm.png
+            output/world.json
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Sumario
+        if: always()
+        run: |
+          cat >> $GITHUB_STEP_SUMMARY << 'EOF'
+          ## AXEV 3D Terrain Viewer
+
+          | Campo | Valor |
+          |---|---|
+          | Viewer | index.html (Three.js interactivo) |
+          | GPU usada | Nao |
+          | APIs pagas | Nao |
+
+          ### Como usar o viewer
+          1. Descarregar artefacto **AXEV-3D-VIEWER**
+          2. Extrair o ZIP
+          3. Abrir `index.html` num browser (Chrome, Firefox, Edge)
+          4. Arrastar = rodar | Scroll = zoom | Btn dir = mover | Duplo clique = reset camara
+          EOF
