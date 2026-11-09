@@ -1,0 +1,24 @@
+{
+  "world_name": "AXEV Quicktest Island",
+  "prompt": "small volcanic island with a central peak, beaches, tropical forest, coastal cliffs, and a lagoon",
+  "seed": 42,
+  "size_hectares": 50,
+  "resolution": 512,
+  "meters_per_pixel": 2.0,
+  "terrain_ops": [
+    {"op": "voronoi", "n": 3, "key": "region"},
+    {"op": "radial_mask", "key": "island_core", "cx": 256, "cy": 256, "radius": 180, "falloff": 4.0},
+    {"op": "fbm", "octaves": 5, "base_freq": 3, "persistence": 0.6},
+    {"op": "mountains", "mask": "region0", "height_m": 320.0, "octaves": 5},
+    {"op": "raise", "mask": "island_core", "height_m": 60.0},
+    {"op": "depress", "mask": "island_core", "depth_m": 10.0},
+    {"op": "river", "start": [120, 100], "end": [390, 400], "width": 8},
+    {"op": "coast", "sea_level_m": 8.0},
+    {"op": "normalize", "min_m": 0.0, "max_m": 340.0}
+  ],
+  "regions": ["volcanic_peak", "tropical_forest", "coastal_beach"],
+  "structures": ["lighthouse", "fishing_village", "ruins"],
+  "natural_features": ["volcano", "lagoon", "cliffs", "beach", "forest"],
+  "export_formats": ["gltf_manifest", "godot_tscn"],
+  "_note": "Mundo de teste rapido: 512px, 50ha. CPU-only, sem GPU. Ideal para validar o pipeline."
+}
